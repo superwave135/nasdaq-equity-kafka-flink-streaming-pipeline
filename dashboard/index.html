@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Streaming Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & Base ─────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #000000;
+    --surface:   #1c1c1e;
+    --border:    #334155;
+    --border-hi: #475569;
+    --green:     #4ade80;
+    --green-dim: #22c55e;
+    --amber:     #fbbf24;
+    --red:       #f87171;
+    --blue:      #60a5fa;
+    --muted:     #64748b;
+    --text:      #e2e8f0;
+    --text-dim:  #94a3b8;
+    --mono:      'Share Tech Mono', monospace;
+    --sans:      'Barlow', sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Scanline overlay (subtle) ──────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(74,222,128,0.005) 2px,
+      rgba(74,222,128,0.005) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── Layout ───────────────────────────────────────────────────────────── */
+  .shell {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px 20px;
+  }
+
+  /* ── Header ───────────────────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 20px;
+    margin-bottom: 28px;
+  }
+
+  .logo-block { display: flex; flex-direction: column; gap: 4px; }
+
+  .logo {
+    font-family: var(--sans);
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: 0.05em;
+  }
+
+  .logo span { color: var(--text-dim); font-size: 12px; }
+
+  .header-meta {
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: right;
+    line-height: 1.8;
+  }
+
+  .clock { color: var(--green); font-size: 13px; }
+
+  /* ── Status bar ───────────────────────────────────────────────────────── */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--green);
+    padding: 10px 16px;
+    margin-bottom: 24px;
+    font-family: var(--sans);
+    font-size: 12px;
+    transition: border-left-color 0.3s;
+  }
+
+  .status-bar.running  { border-left-color: var(--green); }
+  .status-bar.starting { border-left-color: var(--amber); }
+  .status-bar.idle     { border-left-color: var(--muted); }
+  .status-bar.error    { border-left-color: var(--red); }
+  .status-bar.done     { border-left-color: var(--blue); }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .status-dot.pulse {
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(74,222,128,0.6);
+    animation: pulse-ring 1.2s infinite;
+  }
+  .status-dot.amber { background: var(--amber); }
+  .status-dot.red   { background: var(--red); }
+  .status-dot.blue  { background: var(--blue); }
+
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0   rgba(74,222,128,0.6); }
+    70%  { box-shadow: 0 0 0 8px rgba(74,222,128,0);   }
+    100% { box-shadow: 0 0 0 0   rgba(74,222,128,0);   }
+  }
+
+  .status-label { color: var(--text-dim); }
+  .status-value { color: var(--text); font-weight: 600; }
+  .status-sep   { color: var(--border-hi); }
+  .status-run-id { color: var(--blue); }
+
+  /* ── Grid ─────────────────────────────────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "progress  stocks"
+      "controls  stocks"
+      "chart     chart";
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 14px;
+  }
+
+  .panel-progress { grid-area: progress; }
+  .panel-controls { grid-area: controls; }
+  .panel-stocks   { grid-area: stocks; }
+  .panel-chart    { grid-area: chart; }
+
+  .panel-label {
+    font-family: var(--sans);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .panel-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ── Progress bar ─────────────────────────────────────────────────────── */
+  .progress-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .progress-numbers {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--sans);
+  }
+
+  .tick-big {
+    font-size: 32px;
+    color: var(--green);
+    line-height: 1;
+  }
+
+  .tick-total {
+    font-size: 16px;
+    color: var(--text-dim);
+  }
+
+  .tick-pct {
+    font-size: 13px;
+    color: var(--text-dim);
+    align-self: flex-end;
+  }
+
+  .progress-track {
+    height: 5px;
+    background: var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--green-dim), var(--green));
+    width: 0%;
+    transition: width 0.4s ease;
+    position: relative;
+  }
+
+  .progress-fill::after {
+    content: '';
+    position: absolute;
+    right: 0; top: 0; bottom: 0;
+    width: 16px;
+    background: linear-gradient(90deg, transparent, rgba(74,222,128,0.6));
+  }
+
+  .elapsed {
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  /* ── Control panel ────────────────────────────────────────────────────── */
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    border: 1px solid;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+    text-transform: uppercase;
+    background: transparent;
+  }
+
+  .btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .btn:hover::before { opacity: 1; }
+  .btn:active { transform: scale(0.98); }
+
+  .btn-start {
+    color: var(--green);
+    border-color: var(--green-dim);
+  }
+  .btn-start::before  { background: rgba(74,222,128,0.07); }
+  .btn-start:hover    { border-color: var(--green); box-shadow: 0 0 12px rgba(74,222,128,0.12); }
+
+  .btn-stop {
+    color: var(--red);
+    border-color: rgba(248,113,113,0.4);
+  }
+  .btn-stop::before { background: rgba(248,113,113,0.06); }
+  .btn-stop:hover   { border-color: var(--red); }
+
+  .btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  .btn-curl {
+    font-size: 10px;
+    padding: 6px 10px;
+    color: var(--text-dim);
+    border-color: var(--border);
+    letter-spacing: 0;
+    text-align: left;
+    justify-content: flex-start;
+    text-transform: none;
+    font-weight: 400;
+  }
+  .btn-curl:hover { color: var(--text); border-color: var(--border-hi); }
+
+  /* ── Stock Watch panel ─────────────────────────────────────────────── */
+  .stock-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stock-item {
+    display: flex;
+    align-items: center;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+
+  .stock-item:last-child {
+    border-bottom: none;
+  }
+
+  .stock-name {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 16px;
+    color: var(--text);
+    flex: 1;
+    min-width: 0;
+  }
+
+  .stock-price {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 400;
+    color: var(--text-dim);
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .stock-badge {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 5px 14px;
+    border-radius: 20px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 90px;
+    text-align: center;
+  }
+
+  .stock-badge.up {
+    background: rgba(74, 222, 128, 0.12);
+    color: #4ade80;
+  }
+
+  .stock-badge.down {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+  }
+
+  .stock-badge.flat {
+    background: rgba(148, 163, 184, 0.12);
+    color: #94a3b8;
+  }
+
+  .stock-spark {
+    width: 80px;
+    height: 32px;
+    flex-shrink: 0;
+  }
+
+  /* ── Tick Chart ──────────────────────────────────────────────────────── */
+  .chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 200px;
+    margin-bottom: 12px;
+  }
+
+  .chart-wrap canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .chart-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-size: 11px;
+  }
+
+  .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    font-family: var(--sans);
+    font-size: 11px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+  }
+
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .legend-sym {
+    font-weight: 600;
+    font-size: 12px;
+  }
+
+  .legend-price {
+    color: var(--text);
+  }
+
+  .legend-delta {
+    font-size: 10px;
+  }
+  .legend-delta.up   { color: var(--green); }
+  .legend-delta.down { color: var(--red); }
+  .legend-delta.flat { color: var(--text-dim); }
+
+  /* ── Log terminal ─────────────────────────────────────────────────────── */
+  .log-terminal {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 12px;
+    height: 120px;
+    overflow-y: auto;
+    font-family: var(--sans);
+    font-size: 11px;
+    line-height: 1.7;
+    scroll-behavior: smooth;
+  }
+
+  .log-terminal::-webkit-scrollbar { width: 4px; }
+  .log-terminal::-webkit-scrollbar-thumb { background: var(--border-hi); }
+
+  .log-line { display: flex; gap: 10px; }
+  .log-ts   { color: var(--text-dim); flex-shrink: 0; }
+  .log-msg  { color: var(--text); }
+  .log-ok   .log-msg { color: var(--green); }
+  .log-warn .log-msg { color: var(--amber); }
+  .log-err  .log-msg { color: var(--red); }
+  .log-info .log-msg { color: var(--blue); }
+
+  /* ── Architecture diagram ─────────────────────────────────────────────── */
+  .arch {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--text-dim);
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .arch-node {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 8px 6px;
+    color: var(--text);
+    white-space: nowrap;
+    position: relative;
+    transition: border-color 0.3s, color 0.3s, box-shadow 0.3s;
+    flex: 1;
+    text-align: center;
+    font-weight: 600;
+  }
+
+  .arch-node.active {
+    border-color: var(--green);
+    color: var(--green);
+    animation: node-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes node-pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(74, 222, 128, 0.2); }
+    50%      { box-shadow: 0 0 14px rgba(74, 222, 128, 0.5); }
+  }
+
+  .arch-arrow {
+    color: var(--border-hi);
+    padding: 0 2px;
+    font-size: 20px;
+    line-height: 1;
+    transition: color 0.3s;
+    flex-shrink: 0;
+  }
+
+  .arch-arrow.active {
+    color: var(--green);
+    animation: arrow-blink 2s ease-in-out infinite;
+  }
+
+  @keyframes arrow-blink {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 1; }
+  }
+
+  /* ── Footer ───────────────────────────────────────────────────────────── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--sans);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  @media (max-width: 640px) {
+    .grid {
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        "stocks"
+        "progress"
+        "controls"
+        "chart";
+    }
+    .arch { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Header -->
+  <header>
+    <div class="logo-block">
+      <div class="logo">◈ STOCK STREAMING PIPELINE<span> // v1.0</span></div>
+      <div style="font-size:11px; color:var(--text-dim); font-family:var(--sans); margin-top:4px;">
+        Apache Kafka (KRaft) · Apache Flink · AWS ECS · Glue ETL
+      </div>
+    </div>
+    <div class="header-meta">
+      <div class="clock" id="clock">--:--:-- UTC</div>
+      <div>REGION: <span style="color:var(--text)">ap-southeast-1</span></div>
+      <div>ENV: <span style="color:var(--amber)">DEV</span></div>
+    </div>
+  </header>
+
+  <!-- Status bar -->
+  <div class="status-bar idle" id="status-bar">
+    <div class="status-dot" id="status-dot"></div>
+    <span class="status-label">STATE:</span>
+    <span class="status-value" id="status-state">IDLE</span>
+    <span class="status-sep">|</span>
+    <span class="status-label">RUN:</span>
+    <span class="status-run-id" id="status-run-id">—</span>
+    <span class="status-sep">|</span>
+    <span class="status-label">TICKS:</span>
+    <span class="status-value" id="status-ticks">0 / 70</span>
+    <span class="status-sep">|</span>
+    <span class="status-label">UPDATED:</span>
+    <span class="status-value" id="status-updated">—</span>
+  </div>
+
+  <!-- Architecture flow -->
+  <div style="margin-bottom:20px;">
+    <div class="panel-label" style="margin-bottom:10px;">Pipeline Architecture</div>
+    <div class="arch">
+      <div class="arch-node" id="arch-api">API Gateway</div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node" id="arch-ctrl">Controller λ</div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node" id="arch-ecs">ECS Services</div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node" id="arch-prod">Producer λ ×70</div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node" id="arch-kafka">Kafka (KRaft)</div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node" id="arch-flink">Flink</div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node" id="arch-s3">S3 → Glue</div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node" id="arch-athena">Athena</div>
+    </div>
+  </div>
+
+  <!-- Main grid -->
+  <div class="grid">
+
+    <!-- Progress panel (compact) -->
+    <div class="panel panel-progress">
+      <div class="panel-label">Tick Progress</div>
+      <div class="progress-wrap">
+        <div class="progress-numbers">
+          <div>
+            <span class="tick-big" id="tick-count">0</span>
+            <span class="tick-total"> / 70</span>
+          </div>
+          <span class="tick-pct" id="tick-pct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="elapsed" id="elapsed-time">Elapsed: —</div>
+      </div>
+    </div>
+
+    <!-- Controls panel (compact) -->
+    <div class="panel panel-controls">
+      <div class="panel-label">Pipeline Control</div>
+      <div class="controls">
+        <button class="btn btn-start" id="btn-start" onclick="startPipeline()">
+          <span>▶</span> START PIPELINE
+        </button>
+        <button class="btn btn-stop" id="btn-stop" onclick="stopPipeline()" disabled>
+          <span>■</span> STOP PIPELINE
+        </button>
+        <button class="btn btn-curl" onclick="copyCurl()" title="Copy curl command">
+          $ curl -X POST https://&lt;api-id&gt;.execute-api.../pipeline/start
+        </button>
+      </div>
+    </div>
+
+    <!-- Stock Watch panel (new, spans 2 rows) -->
+    <div class="panel panel-stocks">
+      <div class="panel-label">Stock Watch</div>
+      <div class="stock-list" id="stock-list">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- Live prices chart panel (full width) -->
+    <div class="panel panel-chart">
+      <div class="panel-label">Live Prices — 5 Symbols (GBM Simulation)</div>
+      <div class="chart-wrap" id="chart-wrap">
+        <div class="chart-empty" id="chart-empty">Start the pipeline to see live tick chart</div>
+        <canvas id="tick-chart" style="display:none;"></canvas>
+      </div>
+      <div class="chart-legend" id="chart-legend"></div>
+    </div>
+
+  </div>
+
+  <!-- Log terminal -->
+  <div style="margin-bottom: 20px;">
+    <div class="panel-label">Event Log</div>
+    <div class="log-terminal" id="log"></div>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div>STOCK-STREAMING-PIPELINE · GEEKYTAN</div>
+  </footer>
+
+</div>
+
+<script>
+  // ── Config ─────────────────────────────────────────────────────────────────
+  // Replace with your actual API Gateway URL after terraform apply
+  const API_BASE = 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/dev';
+
+  const SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA'];
+
+  const SYMBOL_FULL_NAMES = {
+    AAPL:  'Apple Inc',
+    MSFT:  'Microsoft Corp',
+    GOOGL: 'Alphabet Inc',
+    AMZN:  'Amazon.com Inc',
+    NVDA:  'NVIDIA Corp',
+  };
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let pollInterval  = null;
+  let lastPrices    = {};
+  let currentState  = 'IDLE';
+  let currentRunId  = null;
+
+  // ── Chart state ───────────────────────────────────────────────────────────
+  const SYMBOL_COLORS = {
+    AAPL:  '#4ade80',
+    MSFT:  '#60a5fa',
+    GOOGL: '#fbbf24',
+    AMZN:  '#a78bfa',
+    NVDA:  '#f87171',
+  };
+  let priceHistory   = {};   // { symbol: [price, price, ...] }
+  let baselinePrices = {};   // { symbol: firstPrice }
+  let tickIndex      = 0;
+
+  // ── Clock ──────────────────────────────────────────────────────────────────
+  function updateClock() {
+    document.getElementById('clock').textContent =
+      new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // ── Logging ────────────────────────────────────────────────────────────────
+  function log(msg, level = 'info') {
+    const el  = document.getElementById('log');
+    const ts  = new Date().toISOString().slice(11, 23);
+    const div = document.createElement('div');
+    div.className = `log-line log-${level}`;
+    div.innerHTML = `<span class="log-ts">${ts}</span><span class="log-msg">${msg}</span>`;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+    // Keep last 200 lines
+    while (el.children.length > 200) el.removeChild(el.firstChild);
+  }
+
+  // ── Arch node activation ───────────────────────────────────────────────────
+  function setArchActive(nodeIds) {
+    document.querySelectorAll('.arch-node').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.arch-arrow').forEach(a => a.classList.remove('active'));
+    nodeIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.classList.add('active');
+        const prev = el.previousElementSibling;
+        const next = el.nextElementSibling;
+        if (prev && prev.classList.contains('arch-arrow')) prev.classList.add('active');
+        if (next && next.classList.contains('arch-arrow')) next.classList.add('active');
+      }
+    });
+  }
+
+  // ── Status bar update ──────────────────────────────────────────────────────
+  function updateStatusBar(data) {
+    const bar    = document.getElementById('status-bar');
+    const dot    = document.getElementById('status-dot');
+    const state  = data.run_state || 'IDLE';
+
+    document.getElementById('status-state').textContent   = state;
+    document.getElementById('status-run-id').textContent  = data.run_id || '—';
+    document.getElementById('status-ticks').textContent   =
+      `${data.tick_count || 0} / ${data.total_ticks || 70}`;
+    document.getElementById('status-updated').textContent =
+      data.updated_at ? data.updated_at.slice(11, 23) + ' UTC' : '—';
+
+    // State classes
+    bar.className = 'status-bar';
+    dot.className = 'status-dot';
+
+    if (state === 'RUNNING') {
+      bar.classList.add('running');
+      dot.classList.add('pulse');
+      setArchActive(['arch-prod', 'arch-kafka', 'arch-flink']);
+    } else if (state === 'STARTING') {
+      bar.classList.add('starting');
+      dot.classList.add('amber');
+      setArchActive(['arch-ctrl', 'arch-ecs']);
+    } else if (state === 'COMPLETED') {
+      bar.classList.add('done');
+      dot.classList.add('blue');
+      setArchActive(['arch-s3', 'arch-athena']);
+    } else if (state === 'FAILED') {
+      bar.classList.add('error');
+      dot.classList.add('red');
+    } else {
+      bar.classList.add('idle');
+    }
+  }
+
+  // ── Progress update ────────────────────────────────────────────────────────
+  function updateProgress(data) {
+    const count    = data.tick_count   || 0;
+    const pct      = data.progress_pct || 0;
+    const elapsed  = data.elapsed_seconds;
+
+    document.getElementById('tick-count').textContent = count;
+    document.getElementById('tick-pct').textContent   = pct + '%';
+    document.getElementById('progress-fill').style.width = pct + '%';
+
+    if (elapsed !== null && elapsed !== undefined) {
+      document.getElementById('elapsed-time').textContent =
+        `Elapsed: ${elapsed.toFixed(1)}s`;
+    }
+  }
+
+  // ── Sparkline drawer ──────────────────────────────────────────────────────
+  function drawSparkline(canvas, data, color) {
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = 80, cssH = 32;
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    if (!data || data.length < 2) {
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, cssH / 2);
+      ctx.lineTo(cssW, cssH / 2);
+      ctx.stroke();
+      return;
+    }
+
+    const min   = Math.min(...data);
+    const max   = Math.max(...data);
+    const range = max - min || 1;
+    const p     = 4;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = 1.5;
+    ctx.lineJoin    = 'round';
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    data.forEach((val, i) => {
+      const x = (i / (data.length - 1)) * cssW;
+      const y = p + ((max - val) / range) * (cssH - p * 2);
+      if (i === 0) ctx.moveTo(x, y);
+      else         ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  // ── Stock Watch: init placeholder ─────────────────────────────────────────
+  function initStockWatch() {
+    const list = document.getElementById('stock-list');
+    list.innerHTML = '';
+    SYMBOLS.forEach(sym => {
+      const item = document.createElement('div');
+      item.className = 'stock-item';
+      item.innerHTML = `
+        <div class="stock-name">${SYMBOL_FULL_NAMES[sym]}</div>
+        <canvas class="stock-spark"></canvas>
+        <div class="stock-price">$—</div>
+        <div class="stock-badge flat">— %</div>
+      `;
+      list.appendChild(item);
+      drawSparkline(item.querySelector('.stock-spark'), [], '#333');
+    });
+  }
+
+  // ── Stock Watch: update with live data ────────────────────────────────────
+  function updateStockWatch(prices) {
+    const list = document.getElementById('stock-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    SYMBOLS.forEach(sym => {
+      const current  = prices[sym];
+      const baseline = baselinePrices[sym];
+      const item     = document.createElement('div');
+      item.className = 'stock-item';
+
+      let priceStr  = '—';
+      let badgeCls  = 'flat';
+      let badgeText = '— %';
+
+      if (current !== undefined) {
+        priceStr = `${current.toFixed(2)}`;
+
+        if (baseline) {
+          const pct = ((current - baseline) / baseline) * 100;
+          if (pct > 0) {
+            badgeCls  = 'up';
+            badgeText = `↑ ${pct.toFixed(2)}%`;
+          } else if (pct < 0) {
+            badgeCls  = 'down';
+            badgeText = `↓ ${Math.abs(pct).toFixed(2)}%`;
+          } else {
+            badgeCls  = 'flat';
+            badgeText = '0.00%';
+          }
+        }
+      }
+
+      item.innerHTML = `
+        <div class="stock-name">${SYMBOL_FULL_NAMES[sym]}</div>
+        <canvas class="stock-spark"></canvas>
+        <div class="stock-price">$${priceStr}</div>
+        <div class="stock-badge ${badgeCls}">${badgeText}</div>
+      `;
+      list.appendChild(item);
+
+      const hist = priceHistory[sym] || [];
+      let sparkColor = '#333';
+      if (hist.length >= 2) {
+        sparkColor = hist[hist.length - 1] >= hist[0] ? '#4ade80' : '#f87171';
+      }
+      drawSparkline(item.querySelector('.stock-spark'), hist, sparkColor);
+    });
+  }
+
+  // ── Chart: reset ───────────────────────────────────────────────────────────
+  function resetChart() {
+    priceHistory   = {};
+    baselinePrices = {};
+    tickIndex      = 0;
+    SYMBOLS.forEach(s => { priceHistory[s] = []; });
+    const canvas = document.getElementById('tick-chart');
+    canvas.style.display = 'none';
+    document.getElementById('chart-empty').style.display = 'flex';
+    document.getElementById('chart-legend').innerHTML = '';
+    initStockWatch();
+  }
+
+  // ── Chart: push data + redraw ─────────────────────────────────────────────
+  function updatePrices(prices) {
+    if (!prices || Object.keys(prices).length === 0) return;
+
+    // Show canvas on first data
+    const canvas  = document.getElementById('tick-chart');
+    const emptyEl = document.getElementById('chart-empty');
+    if (canvas.style.display === 'none') {
+      canvas.style.display = 'block';
+      emptyEl.style.display = 'none';
+    }
+
+    // Push new price point for each symbol
+    SYMBOLS.forEach(sym => {
+      const p = prices[sym];
+      if (p === undefined) return;
+      if (!baselinePrices[sym]) baselinePrices[sym] = p;
+      if (!priceHistory[sym])   priceHistory[sym] = [];
+      priceHistory[sym].push(p);
+    });
+    tickIndex++;
+
+    drawChart();
+    updateLegend(prices);
+    updateStockWatch(prices);
+    lastPrices = { ...prices };
+  }
+
+  // ── Chart: canvas drawing ─────────────────────────────────────────────────
+  function drawChart() {
+    const canvas = document.getElementById('tick-chart');
+    const wrap   = document.getElementById('chart-wrap');
+    const dpr    = window.devicePixelRatio || 1;
+    const w      = wrap.clientWidth;
+    const h      = wrap.clientHeight;
+
+    canvas.width  = w * dpr;
+    canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    // Padding for labels
+    const pad = { top: 10, right: 12, bottom: 24, left: 48 };
+    const cw  = w - pad.left - pad.right;
+    const ch  = h - pad.top  - pad.bottom;
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Compute % change series for each symbol
+    const series = {};
+    let minPct = 0, maxPct = 0;
+    SYMBOLS.forEach(sym => {
+      const hist = priceHistory[sym] || [];
+      const base = baselinePrices[sym];
+      if (!base || hist.length === 0) return;
+      series[sym] = hist.map(p => ((p - base) / base) * 100);
+      series[sym].forEach(v => {
+        if (v < minPct) minPct = v;
+        if (v > maxPct) maxPct = v;
+      });
+    });
+
+    // Add padding to Y range
+    const yRange = maxPct - minPct || 1;
+    minPct -= yRange * 0.1;
+    maxPct += yRange * 0.1;
+
+    const maxTicks = Math.max(tickIndex, 10);
+
+    // Helper: data coords to canvas coords
+    const toX = (i) => pad.left + (i / (maxTicks - 1 || 1)) * cw;
+    const toY = (pct) => pad.top + ch - ((pct - minPct) / (maxPct - minPct)) * ch;
+
+    // ── Grid lines ──────────────────────────────────────────────────────────
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth   = 0.5;
+
+    // Horizontal grid + Y labels
+    const ySteps = 5;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font      = '10px Barlow, sans-serif';
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= ySteps; i++) {
+      const pct = minPct + (maxPct - minPct) * (i / ySteps);
+      const y   = toY(pct);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(w - pad.right, y);
+      ctx.stroke();
+      ctx.fillText((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%', pad.left - 4, y + 3);
+    }
+
+    // Zero line (if in range)
+    if (minPct <= 0 && maxPct >= 0) {
+      const y0 = toY(0);
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth   = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y0);
+      ctx.lineTo(w - pad.right, y0);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // X labels (tick numbers)
+    ctx.fillStyle = '#94a3b8';
+    ctx.textAlign = 'center';
+    const xLabelStep = Math.max(1, Math.floor(maxTicks / 8));
+    for (let i = 0; i < maxTicks; i += xLabelStep) {
+      const x = toX(i);
+      ctx.fillText(String(i + 1), x, h - 4);
+    }
+
+    // ── Data lines ──────────────────────────────────────────────────────────
+    ctx.lineWidth = 1.8;
+    SYMBOLS.forEach(sym => {
+      const pts = series[sym];
+      if (!pts || pts.length < 2) return;
+
+      ctx.strokeStyle = SYMBOL_COLORS[sym];
+      ctx.beginPath();
+      pts.forEach((pct, i) => {
+        const x = toX(i);
+        const y = toY(pct);
+        if (i === 0) ctx.moveTo(x, y);
+        else         ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // Draw endpoint dot
+      const lastX = toX(pts.length - 1);
+      const lastY = toY(pts[pts.length - 1]);
+      ctx.fillStyle = SYMBOL_COLORS[sym];
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  // ── Chart: legend below chart ─────────────────────────────────────────────
+  function updateLegend(prices) {
+    const legend = document.getElementById('chart-legend');
+    legend.innerHTML = '';
+
+    SYMBOLS.forEach(sym => {
+      const current  = prices[sym];
+      const baseline = baselinePrices[sym];
+      if (!current) return;
+
+      let deltaStr  = '—';
+      let direction = 'flat';
+      if (baseline) {
+        const pct = ((current - baseline) / baseline) * 100;
+        deltaStr  = (pct >= 0 ? '+' : '') + pct.toFixed(3) + '%';
+        direction = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+      }
+
+      const item = document.createElement('div');
+      item.className = 'legend-item';
+      item.innerHTML = `
+        <span class="legend-dot" style="background:${SYMBOL_COLORS[sym]}"></span>
+        <span class="legend-sym" style="color:${SYMBOL_COLORS[sym]}">${sym}</span>
+        <span class="legend-price">$${current.toFixed(2)}</span>
+        <span class="legend-delta ${direction}">${deltaStr}</span>
+      `;
+      legend.appendChild(item);
+    });
+  }
+
+  // ── Button state management ────────────────────────────────────────────────
+  function setButtonState(state) {
+    const startBtn = document.getElementById('btn-start');
+    const stopBtn  = document.getElementById('btn-stop');
+
+    if (state === 'RUNNING' || state === 'STARTING') {
+      startBtn.disabled = true;
+      stopBtn.disabled  = false;
+    } else {
+      startBtn.disabled = false;
+      stopBtn.disabled  = true;
+    }
+  }
+
+  // ── Poll status ────────────────────────────────────────────────────────────
+  async function pollStatus() {
+    try {
+      const resp = await fetch(`${API_BASE}/pipeline/status`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      const newState = data.run_state || 'IDLE';
+      const newRunId = data.run_id;
+
+      // Reset chart on new run
+      if (newRunId && newRunId !== currentRunId) {
+        resetChart();
+        lastPrices = {};
+      }
+
+      currentState = newState;
+      currentRunId = newRunId;
+
+      updateStatusBar(data);
+      updateProgress(data);
+      setButtonState(currentState);
+
+      if (data.last_prices && Object.keys(data.last_prices).length > 0) {
+        updatePrices(data.last_prices);
+      }
+
+      // Log state transitions
+      if (currentState === 'COMPLETED' && pollInterval) {
+        log(`Run ${data.run_id} completed — ${data.tick_count} ticks published. Glue ETL: ${data.glue_run_id}`, 'ok');
+        stopPolling();
+      }
+      if (currentState === 'FAILED') {
+        log(`Run ${data.run_id} failed: ${data.error || 'unknown error'}`, 'err');
+        stopPolling();
+      }
+
+    } catch (err) {
+      log(`Status poll failed: ${err.message}`, 'warn');
+    }
+  }
+
+  function startPolling() {
+    if (pollInterval) return;
+    pollInterval = setInterval(pollStatus, 2000);
+    pollStatus(); // immediate first call
+  }
+
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
+  // ── Start pipeline ─────────────────────────────────────────────────────────
+  async function startPipeline() {
+    log('Sending START request to API Gateway...', 'info');
+    document.getElementById('btn-start').disabled = true;
+
+    // Reset UI immediately — don't wait for the API response
+    resetChart();
+    lastPrices   = {};
+    currentRunId = null;
+    setArchActive(['arch-api', 'arch-ctrl']);
+
+    // Start polling right away so we pick up state changes
+    // even if the API Gateway times out (29s limit)
+    startPolling();
+
+    try {
+      const resp = await fetch(`${API_BASE}/pipeline/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const data = await resp.json();
+
+      if (resp.status === 409) {
+        log(`Pipeline already running: run_id=${data.run_id}`, 'warn');
+        currentRunId = data.run_id;
+        return;
+      }
+
+      if (!resp.ok) {
+        log(`Start failed: ${data.error || resp.statusText}`, 'err');
+        document.getElementById('btn-start').disabled = false;
+        stopPolling();
+        return;
+      }
+
+      log(`Pipeline started — run_id: ${data.run_id}`, 'ok');
+      log(`ECS services starting... waiting for Kafka + Flink to stabilise`, 'info');
+      log(`Producer will fire every 1s for 70 ticks`, 'info');
+      currentRunId = data.run_id;
+
+    } catch (err) {
+      // API Gateway has a 29s timeout — the controller Lambda keeps running
+      // in the background. Polling will pick up the new run state.
+      log('API Gateway timed out — pipeline is starting in background', 'warn');
+      log('Status polling active — dashboard will update when ECS is ready', 'info');
+    }
+  }
+
+  // ── Stop pipeline ──────────────────────────────────────────────────────────
+  async function stopPipeline() {
+    if (!currentRunId) return;
+    log(`Sending STOP request for run_id=${currentRunId}...`, 'warn');
+
+    try {
+      const resp = await fetch(`${API_BASE}/pipeline/stop`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: currentRunId }),
+      });
+      const data = await resp.json();
+      log(`Pipeline stopped. State: ${data.final_state}`, 'warn');
+      stopPolling();
+      setButtonState('IDLE');
+      setArchActive([]);
+    } catch (err) {
+      log(`Stop request failed: ${err.message}`, 'err');
+    }
+  }
+
+  // ── Copy curl command ──────────────────────────────────────────────────────
+  function copyCurl() {
+    const cmd = `curl -X POST ${API_BASE}/pipeline/start`;
+    navigator.clipboard.writeText(cmd).then(() => {
+      log(`Curl command copied to clipboard`, 'info');
+    });
+  }
+
+  // ── Resize handler ─────────────────────────────────────────────────────────
+  window.addEventListener('resize', () => {
+    if (tickIndex > 0) drawChart();
+  });
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  resetChart();
+  log('Dashboard initialised', 'info');
+  log(`API endpoint: ${API_BASE}`, 'info');
+  log('Polling status every 2s once pipeline starts', 'info');
+  pollStatus(); // check initial state on load
+</script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# dev.yaml — Development Environment Configuration
+# Loaded by Lambda handlers and Flink jobs at runtime
+# ──────────────────────────────────────────────────────────────────────────────
+
+environment: dev
+region: ap-southeast-1
+
+# ── Stock Universe (GBM Parameters) ──────────────────────────────────────────
+symbols:
+  AAPL:
+    base_price: 182.00
+    volatility: 0.25
+    drift: 0.08
+  MSFT:
+    base_price: 415.00
+    volatility: 0.22
+    drift: 0.10
+  GOOGL:
+    base_price: 175.00
+    volatility: 0.28
+    drift: 0.09
+  AMZN:
+    base_price: 195.00
+    volatility: 0.30
+    drift: 0.12
+  NVDA:
+    base_price: 875.00
+    volatility: 0.45
+    drift: 0.15
+
+# ── Pipeline Configuration ───────────────────────────────────────────────────
+pipeline:
+  total_ticks: 60
+  tick_interval_seconds: 1.0
+  # dt = 1 second as fraction of trading year
+  # 252 trading days × 6.5 hours × 3600 seconds
+  dt: 0.000000170
+
+# ── Kafka Topics ─────────────────────────────────────────────────────────────
+kafka:
+  topics:
+    raw_ticks: raw-ticks
+    enriched_ticks: enriched-ticks
+    vwap_ticks: vwap-ticks
+    alerts: alerts
+
+# ── Alerting Thresholds ──────────────────────────────────────────────────────
+alerts:
+  price_spike_pct: 2.0        # % change per tick to trigger alert
+  volume_spike_multiplier: 3  # × average volume to trigger alert
