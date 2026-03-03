@@ -78,7 +78,7 @@ After deployment, your dashboard URL will be output by Terraform:
 │                ▼                                            │
 │  Glue PySpark ETL → S3 Curated Zone                         │
 │  ├── fact_tick_events      (partitioned by date/symbol)     │
-│  ├── fact_ohlcv_candles    (1-min OHLCV + VWAP)             │
+│  ├── fact_vwap             (10s VWAP windows: high, low, total volume)             │
 │  ├── dim_symbols           (reference dimension)            │
 │  ├── agg_daily_summary     (daily price/volume aggregates)  │
 │  └── agg_alerts            (all triggered anomalies)        │
@@ -209,6 +209,7 @@ nasdaq-stock-streaming-pipeline/
 │       └── github_oidc/              # OIDC provider for CI/CD
 ├── config/
 │   └── dev.yaml                      # Runtime config (GBM params, thresholds)
+├── scripts/                          # Helper/utility scripts
 ├── tests/
 │   ├── test_producer.py
 │   ├── test_controller.py
@@ -216,7 +217,8 @@ nasdaq-stock-streaming-pipeline/
 │   └── test_status.py
 ├── .github/
 │   └── workflows/deploy.yml          # CI/CD pipeline
-├── CLAUDE.md
+├── conftest.py                       # Pytest shared fixtures
+├── startup.md                        # Step-by-step deployment guide
 └── README.md
 ```
 
@@ -255,7 +257,7 @@ Topics are pre-created by Terraform (`auto.create.topics.enable=false`).
 | Table | Type | Partition | Description |
 |---|---|---|---|
 | `fact_tick_events` | Fact | date, symbol | Individual tick records |
-| `fact_ohlcv_candles` | Fact | date, symbol | 1-minute OHLCV + VWAP candles |
+| `fact_vwap` | Fact | date, symbol | 10-second VWAP windows with high, low, total volume |
 | `dim_symbols` | Dimension | — | Symbol reference data |
 | `agg_daily_summary` | Aggregate | date | Daily price/volume aggregates |
 | `agg_alerts` | Aggregate | date | All triggered anomaly alerts |
@@ -337,6 +339,8 @@ Pull requests run lint, tests, and `terraform plan` only.
 ---
 
 ## Quick Start
+
+> For a full step-by-step deployment walkthrough including Docker image builds, GitHub Actions setup, Athena queries, and troubleshooting, see [startup.md](startup.md).
 
 ```bash
 # 1. Clone

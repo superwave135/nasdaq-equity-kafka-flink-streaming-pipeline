@@ -15,7 +15,6 @@ on:
 
 env:
   AWS_REGION:     ap-southeast-1
-  ECR_REGISTRY:   ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-southeast-1.amazonaws.com
   TF_WORKING_DIR: terraform
 
 permissions:
@@ -33,11 +32,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
-          pip install -r lambda/producer/requirements.txt
+          for fn in producer controller teardown status; do
+            pip install -r "lambda/${fn}/requirements.txt" --quiet
+          done
           pip install pytest pytest-mock flake8
 
       - name: Lint
@@ -63,7 +64,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Build Lambda packages
         run: |
@@ -133,15 +134,16 @@ jobs:
 
       - name: Build and push ${{ matrix.service }}
         run: |
-          IMAGE=${{ env.ECR_REGISTRY }}/stock-streaming-dev-${{ matrix.service }}:${{ github.sha }}
+          ECR_REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          IMAGE="${ECR_REGISTRY}/stock-streaming-dev-${{ matrix.service }}:${{ github.sha }}"
+          LATEST="${ECR_REGISTRY}/stock-streaming-dev-${{ matrix.service }}:latest"
           docker build \
-            -t $IMAGE \
-            -f docker/${{ matrix.service }}/Dockerfile \
+            -t "$IMAGE" \
+            -f "docker/${{ matrix.service }}/Dockerfile" \
             .
-          docker push $IMAGE
-          # Also tag as latest
-          docker tag $IMAGE ${{ env.ECR_REGISTRY }}/stock-streaming-dev-${{ matrix.service }}:latest
-          docker push ${{ env.ECR_REGISTRY }}/stock-streaming-dev-${{ matrix.service }}:latest
+          docker push "$IMAGE"
+          docker tag "$IMAGE" "$LATEST"
+          docker push "$LATEST"
 
   # ── Terraform Apply ─────────────────────────────────────────────────────────
   terraform-apply:
@@ -162,7 +164,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Build Lambda packages
         run: |
