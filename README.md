@@ -1,8 +1,22 @@
 # nasdaq-stock-streaming-pipeline
 
+[![AWS](https://img.shields.io/badge/AWS-Cloud-orange?logo=amazon-aws)](https://aws.amazon.com/)
+[![Terraform](https://img.shields.io/badge/Terraform-%3E%3D1.5-purple?logo=terraform)](https://www.terraform.io/)
+[![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python)](https://www.python.org/)
+[![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka-3.7%20KRaft-black?logo=apache-kafka)](https://kafka.apache.org/)
+[![Apache Flink](https://img.shields.io/badge/Apache%20Flink-1.19-E6522C?logo=apache-flink)](https://flink.apache.org/)
+[![Docker](https://img.shields.io/badge/Docker-ECS%20Fargate-2496ED?logo=docker)](https://www.docker.com/)
+[![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-CI%2FCD-2088FF?logo=github-actions)](https://github.com/features/actions)
+
 An **event-driven** real-time stock tick data streaming pipeline built on AWS. Triggered via a REST API or S3-hosted dashboard — starts Apache Kafka (KRaft) and Flink on ECS Fargate, runs a 60-second simulated tick feed (5 NASDAQ symbols, Geometric Brownian Motion pricing), then auto-tears down and triggers a Glue ETL job that builds a dimensional model queryable in Athena.
 
 Built as a portfolio project to demonstrate real-time streaming architecture, event-driven design, and infrastructure-as-code on AWS.
+
+## Dashboard Demo
+
+<p align="center">
+  <img src="assets/nasdaq-streaming-dashboard.gif" alt="Live pipeline dashboard" width="800"/>
+</p>
 
 ## Dashboard URL
 After deployment, your dashboard URL will be output by Terraform:
