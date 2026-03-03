@@ -25,6 +25,7 @@ venv/
 
 # Lambda packaging
 lambda/**/*.zip
+terraform/modules/lambda/.build/
 
 # IDE
 .vscode/
